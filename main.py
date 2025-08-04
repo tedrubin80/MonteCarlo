@@ -275,7 +275,7 @@ def run_complete_simulation():
         print("  ✓ monte_carlo_raw_data.csv - Raw simulation data")
         print("  ✓ consumer_harm_analysis.png - Statistical visualizations")
         print("  ✓ simulation_summary.txt - Key findings summary")
-        print("  ✓ simulation_results.zip - All files in one archive"))
+        print("  ✓ simulation_results.zip - All files in one archive")
     
     return True
 
