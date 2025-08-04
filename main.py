@@ -1,24 +1,222 @@
 #!/usr/bin/env python3
 """
-Monte Carlo Simulation Runner for Railway
-This script orchestrates the simulation and generates all outputs
+Standalone Monte Carlo Simulation - All functionality in one file
+This combines the simulation, Excel export, and main runner
 """
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
 import os
 import sys
 import json
 import zipfile
 from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
 
-# Import the simulation modules
-from consumer_harm_monte_carlo import (
-    run_monte_carlo_simulation,
-    calculate_statistics,
-    PARAMS,
-    ANNUAL_TRANSACTIONS,
-    N_SIMULATIONS
-)
-from export_to_excel import ExcelExporter
+# Set random seed for reproducibility
+np.random.seed(42)
+
+# Configuration
+N_SIMULATIONS = 10000  # Number of simulated customers
+ANNUAL_TRANSACTIONS = 1.73e6  # 1.73 million transactions per year
+SERVICE_FAILURE_PENALTY = 1000
+
+# Distribution parameters (using triangular distributions)
+PARAMS = {
+    'base_service_cost': {'min': 2500, 'mode': 3200, 'max': 4000},
+    'hidden_fees': {'min': 0, 'mode': 375, 'max': 1100},
+    'service_failure_prob': {'min': 0.15, 'mode': 0.30, 'max': 0.45},
+    'claim_denial_prob': {'min': 0.60, 'mode': 0.85, 'max': 0.95},
+    'damage_occurrence_rate': {'min': 0.05, 'mode': 0.12, 'max': 0.25},
+    'average_damage_value': {'min': 500, 'mode': 2500, 'max': 10000}
+}
+
+def triangular_sample(min_val, mode_val, max_val, size):
+    """Generate samples from triangular distribution"""
+    return np.random.triangular(min_val, mode_val, max_val, size)
+
+def run_monte_carlo_simulation(params=PARAMS, n_sims=N_SIMULATIONS):
+    """Run Monte Carlo simulation for consumer harm"""
+    # Generate random samples for each parameter
+    service_costs = triangular_sample(
+        params['base_service_cost']['min'],
+        params['base_service_cost']['mode'],
+        params['base_service_cost']['max'],
+        n_sims
+    )
+    
+    hidden_fees = triangular_sample(
+        params['hidden_fees']['min'],
+        params['hidden_fees']['mode'],
+        params['hidden_fees']['max'],
+        n_sims
+    )
+    
+    service_failure_probs = triangular_sample(
+        params['service_failure_prob']['min'],
+        params['service_failure_prob']['mode'],
+        params['service_failure_prob']['max'],
+        n_sims
+    )
+    
+    claim_denial_probs = triangular_sample(
+        params['claim_denial_prob']['min'],
+        params['claim_denial_prob']['mode'],
+        params['claim_denial_prob']['max'],
+        n_sims
+    )
+    
+    damage_occurrence_rates = triangular_sample(
+        params['damage_occurrence_rate']['min'],
+        params['damage_occurrence_rate']['mode'],
+        params['damage_occurrence_rate']['max'],
+        n_sims
+    )
+    
+    damage_values = triangular_sample(
+        params['average_damage_value']['min'],
+        params['average_damage_value']['mode'],
+        params['average_damage_value']['max'],
+        n_sims
+    )
+    
+    # Simulate events
+    service_failures = np.random.random(n_sims) < service_failure_probs
+    damage_occurred = np.random.random(n_sims) < damage_occurrence_rates
+    claims_denied = np.random.random(n_sims) < claim_denial_probs
+    
+    # Calculate harm components
+    service_failure_harm = service_failures * SERVICE_FAILURE_PENALTY
+    damage_harm = damage_occurred * damage_values * claims_denied
+    
+    # Total harm per customer
+    total_harm = hidden_fees + service_failure_harm + damage_harm
+    
+    # Create results dataframe
+    results = pd.DataFrame({
+        'service_cost': service_costs,
+        'hidden_fees': hidden_fees,
+        'service_failure': service_failures,
+        'service_failure_harm': service_failure_harm,
+        'damage_occurred': damage_occurred,
+        'damage_value': damage_values,
+        'claim_denied': claims_denied,
+        'damage_harm': damage_harm,
+        'total_harm': total_harm
+    })
+    
+    return results
+
+def calculate_statistics(results):
+    """Calculate key statistics from simulation results"""
+    harm = results['total_harm']
+    
+    stats_dict = {
+        'Mean Harm': harm.mean(),
+        'Median Harm': harm.median(),
+        'Std Dev': harm.std(),
+        'Min Harm': harm.min(),
+        'Max Harm': harm.max(),
+        '10th Percentile': harm.quantile(0.10),
+        '25th Percentile': harm.quantile(0.25),
+        '75th Percentile': harm.quantile(0.75),
+        '90th Percentile': harm.quantile(0.90),
+        '95th Percentile': harm.quantile(0.95),
+        '99th Percentile': harm.quantile(0.99),
+        'Customers with Zero Harm': (harm == 0).sum(),
+        'Customers with Harm > $1000': (harm > 1000).sum(),
+        'Customers with Harm > $5000': (harm > 5000).sum(),
+        '% with Zero Harm': (harm == 0).sum() / len(harm) * 100,
+        '% with Harm > $1000': (harm > 1000).sum() / len(harm) * 100,
+        '% with Harm > $5000': (harm > 5000).sum() / len(harm) * 100,
+        'Annual Industry Impact (Mean)': harm.mean() * ANNUAL_TRANSACTIONS,
+        'Annual Industry Impact (95th %ile)': harm.quantile(0.95) * ANNUAL_TRANSACTIONS
+    }
+    
+    return stats_dict
+
+def create_excel_report(results, stats, scenario_results, output_dir):
+    """Create Excel report with basic pandas functionality"""
+    excel_file = os.path.join(output_dir, "Consumer_Harm_Analysis.xlsx")
+    
+    with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+        # Executive Summary
+        summary_data = {
+            'Metric': [
+                'Mean Consumer Harm',
+                'Median Consumer Harm',
+                '95th Percentile Harm',
+                'Annual Industry Impact (Mean)',
+                'Customers with Zero Harm',
+                'Customers with Harm > $1,000',
+                'Customers with Harm > $5,000'
+            ],
+            'Value': [
+                f"${stats['Mean Harm']:,.2f}",
+                f"${stats['Median Harm']:,.2f}",
+                f"${stats['95th Percentile']:,.2f}",
+                f"${stats['Annual Industry Impact (Mean)']:,.0f}",
+                f"{stats['Customers with Zero Harm']:,}",
+                f"{stats['Customers with Harm > $1000']:,}",
+                f"{stats['Customers with Harm > $5000']:,}"
+            ]
+        }
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_excel(writer, sheet_name='Executive Summary', index=False)
+        
+        # Detailed Results (first 1000)
+        results.head(1000).to_excel(writer, sheet_name='Detailed Results', index=False)
+        
+        # Percentile Analysis
+        percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        percentile_data = {
+            'Percentile': [f"{p}th" for p in percentiles],
+            'Harm Amount': [results['total_harm'].quantile(p/100) for p in percentiles],
+            '% of Customers': percentiles
+        }
+        percentile_df = pd.DataFrame(percentile_data)
+        percentile_df.to_excel(writer, sheet_name='Percentile Analysis', index=False)
+        
+        # Harm Components
+        components_data = {
+            'Component': ['Hidden Fees', 'Service Failures', 'Damages (Denied Claims)'],
+            'Mean': [
+                results['hidden_fees'].mean(),
+                results['service_failure_harm'].mean(),
+                results['damage_harm'].mean()
+            ],
+            'Median': [
+                results['hidden_fees'].median(),
+                results['service_failure_harm'].median(),
+                results['damage_harm'].median()
+            ],
+            'Max': [
+                results['hidden_fees'].max(),
+                results['service_failure_harm'].max(),
+                results['damage_harm'].max()
+            ]
+        }
+        components_df = pd.DataFrame(components_data)
+        components_df.to_excel(writer, sheet_name='Harm Components', index=False)
+        
+        # Scenario Comparison
+        scenario_data = []
+        for scenario_name, scenario_info in scenario_results.items():
+            scenario_data.append({
+                'Scenario': scenario_name,
+                'Mean Harm': scenario_info['stats']['Mean Harm'],
+                'Median Harm': scenario_info['stats']['Median Harm'],
+                '95th Percentile': scenario_info['stats']['95th Percentile'],
+                'Annual Impact': scenario_info['stats']['Annual Industry Impact (Mean)']
+            })
+        scenario_df = pd.DataFrame(scenario_data)
+        scenario_df.to_excel(writer, sheet_name='Scenario Comparison', index=False)
+    
+    return excel_file
 
 def create_output_directory():
     """Create output directory for results"""
@@ -34,11 +232,11 @@ def create_output_directory():
         os.makedirs(output_dir)
     return output_dir
 
-def run_complete_simulation():
-    """Run the complete Monte Carlo simulation with all outputs"""
+def main():
+    """Main execution function"""
     print("="*60)
     print("CONSUMER HARM MONTE CARLO SIMULATION")
-    print("Running on Railway Cloud Platform")
+    print("Standalone Version - Railway Deployment")
     print("="*60)
     print()
     
@@ -46,7 +244,7 @@ def run_complete_simulation():
     output_dir = create_output_directory()
     
     # Run base simulation
-    print("Step 1: Running base simulation with {:,} iterations...".format(N_SIMULATIONS))
+    print(f"Step 1: Running base simulation with {N_SIMULATIONS:,} iterations...")
     results = run_monte_carlo_simulation()
     stats = calculate_statistics(results)
     
@@ -94,7 +292,6 @@ def run_complete_simulation():
     try:
         import matplotlib
         matplotlib.use('Agg')  # Use non-interactive backend
-        import matplotlib.pyplot as plt
         
         # Create summary visualization
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
@@ -156,19 +353,12 @@ def run_complete_simulation():
     
     # Generate Excel report
     print("\nStep 4: Generating Excel report...")
-    excel_file = os.path.join(output_dir, "Consumer_Harm_Analysis.xlsx")
-    
-    exporter = ExcelExporter(excel_file)
-    exporter.create_summary_sheet(stats, scenario_results)
-    exporter.create_detailed_results_sheet(results)
-    exporter.create_percentile_analysis_sheet(results)
-    exporter.create_harm_components_sheet(results)
-    exporter.create_scenario_comparison_sheet(scenario_results)
-    exporter.create_charts_sheet(results, scenario_results)
-    exporter.create_parameters_sheet()
-    exporter.save_workbook()
-    
-    print("✓ Excel report generated")
+    try:
+        excel_file = create_excel_report(results, stats, scenario_results, output_dir)
+        print("✓ Excel report generated")
+    except Exception as e:
+        print(f"⚠ Excel generation error: {str(e)}")
+        excel_file = None
     
     # Save raw data
     print("\nStep 5: Saving raw data...")
@@ -180,73 +370,34 @@ def run_complete_simulation():
         f.write("CONSUMER HARM MONTE CARLO SIMULATION SUMMARY\n")
         f.write("=" * 60 + "\n\n")
         f.write(f"Simulation Date: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}\n")
-        f.write(f"Platform: Railway Cloud\n")
+        f.write(f"Platform: Railway Cloud (Standalone Version)\n")
         f.write(f"Number of simulations: {N_SIMULATIONS:,}\n")
         f.write(f"Annual transactions: {ANNUAL_TRANSACTIONS:,.0f}\n\n")
         
         for scenario_name, scenario_data in scenario_results.items():
             f.write(f"\n{scenario_name.upper()} SCENARIO\n")
             f.write("-" * 40 + "\n")
-            stats = scenario_data['stats']
-            f.write(f"Mean Harm: ${stats['Mean Harm']:,.2f}\n")
-            f.write(f"Median Harm: ${stats['Median Harm']:,.2f}\n")
-            f.write(f"95th Percentile: ${stats['95th Percentile']:,.2f}\n")
-            f.write(f"99th Percentile: ${stats['99th Percentile']:,.2f}\n")
-            f.write(f"Annual Industry Impact: ${stats['Annual Industry Impact (Mean)']:,.0f}\n")
+            s = scenario_data['stats']
+            f.write(f"Mean Harm: ${s['Mean Harm']:,.2f}\n")
+            f.write(f"Median Harm: ${s['Median Harm']:,.2f}\n")
+            f.write(f"95th Percentile: ${s['95th Percentile']:,.2f}\n")
+            f.write(f"99th Percentile: ${s['99th Percentile']:,.2f}\n")
+            f.write(f"Annual Industry Impact: ${s['Annual Industry Impact (Mean)']:,.0f}\n")
             
             if scenario_name != 'Status Quo':
-                reduction = (1 - stats['Mean Harm'] / scenario_results['Status Quo']['stats']['Mean Harm']) * 100
+                reduction = (1 - s['Mean Harm'] / scenario_results['Status Quo']['stats']['Mean Harm']) * 100
                 f.write(f"Reduction from Status Quo: {reduction:.1f}%\n")
     
     print("✓ Summary report created")
     
-    # Create results metadata
-    metadata = {
-        "simulation_date": datetime.now().isoformat(),
-        "platform": "Railway",
-        "simulations": N_SIMULATIONS,
-        "files_generated": [
-            "Consumer_Harm_Analysis.xlsx",
-            "monte_carlo_raw_data.csv",
-            "consumer_harm_analysis.png",
-            "simulation_summary.txt"
-        ],
-        "key_findings": {
-            "mean_harm": stats['Mean Harm'],
-            "median_harm": stats['Median Harm'],
-            "95th_percentile": stats['95th Percentile'],
-            "annual_impact": stats['Annual Industry Impact (Mean)']
-        }
-    }
-    
-    with open(os.path.join(output_dir, 'metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    # Create zip file for easy download
-    print("\nStep 6: Creating downloadable archive...")
-    
-    # Save zip in /data if available, otherwise locally
-    if os.path.exists("/data"):
-        zip_file = f'/data/simulation_results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip'
-    else:
-        zip_file = 'simulation_results.zip'
-    
-    with zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(output_dir):
-            for file in files:
-                file_path = os.path.join(root, file)
-                arcname = os.path.relpath(file_path, os.path.dirname(output_dir))
-                zipf.write(file_path, arcname)
-    
-    print(f"✓ Archive created: {zip_file}")
-    
-    # If using /data, also copy key files to root for easy access
+    # If using /data, copy key files to root for easy access
     if os.path.exists("/data"):
         import shutil
         key_files = [
             'Consumer_Harm_Analysis.xlsx',
             'monte_carlo_raw_data.csv',
-            'simulation_summary.txt'
+            'simulation_summary.txt',
+            'consumer_harm_analysis.png'
         ]
         
         print("\nCopying key files to /data root for easy access...")
@@ -264,29 +415,27 @@ def run_complete_simulation():
     if os.path.exists("/data"):
         print("\nFiles saved to persistent storage:")
         print(f"  ✓ Results directory: {output_dir}")
-        print(f"  ✓ Zip archive: {zip_file}")
         print("\nKey files also available at:")
         print("  ✓ /data/Consumer_Harm_Analysis.xlsx")
         print("  ✓ /data/monte_carlo_raw_data.csv")
         print("  ✓ /data/simulation_summary.txt")
+        print("  ✓ /data/consumer_harm_analysis.png")
     else:
         print("\nGenerated files:")
-        print("  ✓ Consumer_Harm_Analysis.xlsx - Comprehensive Excel report")
+        print("  ✓ Consumer_Harm_Analysis.xlsx - Excel report")
         print("  ✓ monte_carlo_raw_data.csv - Raw simulation data")
-        print("  ✓ consumer_harm_analysis.png - Statistical visualizations")
-        print("  ✓ simulation_summary.txt - Key findings summary")
-        print("  ✓ simulation_results.zip - All files in one archive")
+        print("  ✓ consumer_harm_analysis.png - Visualizations")
+        print("  ✓ simulation_summary.txt - Key findings")
     
+    print("\n✅ Success! The simulation completed successfully.")
     return True
 
 if __name__ == "__main__":
     try:
-        success = run_complete_simulation()
+        success = main()
         if success:
-            print("\n✅ Success! The simulation completed successfully.")
             sys.exit(0)
         else:
-            print("\n❌ Error: The simulation did not complete successfully.")
             sys.exit(1)
     except Exception as e:
         print(f"\n❌ Error: {str(e)}")
