@@ -1,9 +1,0 @@
-# nixpacks.toml
-[phases.setup]
-nixPkgs = ["python311", "gcc", "stdenv.cc.cc.lib"]
-
-[phases.install]
-cmds = ["pip install --upgrade pip setuptools wheel", "pip install -r requirements.txt"]
-
-[start]
-cmd = "python main.py"

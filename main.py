@@ -21,23 +21,18 @@ from consumer_harm_monte_carlo import (
 from export_to_excel import ExcelExporter
 
 def create_output_directory():
-    """Create output directory for results in persistent storage"""
-    output_dir = "/data/simulation_results"
+    """Create output directory for results"""
+    # Use /data if available, otherwise current directory
+    if os.path.exists("/data"):
+        output_dir = "/data/simulation_results"
+        print("Using persistent storage at /data")
+    else:
+        output_dir = "simulation_results"
+        print("Using local storage")
+    
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
-    # Also create a timestamped subdirectory for this run
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(output_dir, f"run_{timestamp}")
-    os.makedirs(run_dir)
-    
-    # Create a symlink to latest run
-    latest_link = os.path.join(output_dir, "latest")
-    if os.path.exists(latest_link):
-        os.remove(latest_link)
-    os.symlink(run_dir, latest_link)
-    
-    return run_dir
+    return output_dir
 
 def run_complete_simulation():
     """Run the complete Monte Carlo simulation with all outputs"""
@@ -229,7 +224,13 @@ def run_complete_simulation():
     
     # Create zip file for easy download
     print("\nStep 6: Creating downloadable archive...")
-    zip_file = os.path.join('/data', f'simulation_results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip')
+    
+    # Save zip in /data if available, otherwise locally
+    if os.path.exists("/data"):
+        zip_file = f'/data/simulation_results_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip'
+    else:
+        zip_file = 'simulation_results.zip'
+    
     with zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for root, dirs, files in os.walk(output_dir):
             for file in files:
@@ -239,33 +240,42 @@ def run_complete_simulation():
     
     print(f"✓ Archive created: {zip_file}")
     
-    # Also copy key files to /data root for easy access
-    import shutil
-    key_files = [
-        ('Consumer_Harm_Analysis.xlsx', 'Consumer_Harm_Analysis.xlsx'),
-        ('monte_carlo_raw_data.csv', 'monte_carlo_raw_data.csv'),
-        ('simulation_summary.txt', 'simulation_summary.txt')
-    ]
-    
-    for src_file, dst_file in key_files:
-        src_path = os.path.join(output_dir, src_file)
-        dst_path = os.path.join('/data', dst_file)
-        if os.path.exists(src_path):
-            shutil.copy2(src_path, dst_path)
-            print(f"✓ Copied {dst_file} to /data")
+    # If using /data, also copy key files to root for easy access
+    if os.path.exists("/data"):
+        import shutil
+        key_files = [
+            'Consumer_Harm_Analysis.xlsx',
+            'monte_carlo_raw_data.csv',
+            'simulation_summary.txt'
+        ]
+        
+        print("\nCopying key files to /data root for easy access...")
+        for filename in key_files:
+            src_path = os.path.join(output_dir, filename)
+            if os.path.exists(src_path):
+                dst_path = os.path.join('/data', filename)
+                shutil.copy2(src_path, dst_path)
+                print(f"✓ Copied {filename} to /data/")
     
     print("\n" + "="*60)
     print("SIMULATION COMPLETE!")
     print("="*60)
-    print("\nFiles saved to persistent storage (/data):")
-    print(f"  ✓ Full results in: {output_dir}")
-    print(f"  ✓ Latest results symlink: /data/simulation_results/latest")
-    print(f"  ✓ Zip archive: {zip_file}")
-    print("\nKey files also copied to /data root:")
-    print("  ✓ /data/Consumer_Harm_Analysis.xlsx")
-    print("  ✓ /data/monte_carlo_raw_data.csv")
-    print("  ✓ /data/simulation_summary.txt")
-    print("\nAll files are permanently stored and will persist across deployments!")
+    
+    if os.path.exists("/data"):
+        print("\nFiles saved to persistent storage:")
+        print(f"  ✓ Results directory: {output_dir}")
+        print(f"  ✓ Zip archive: {zip_file}")
+        print("\nKey files also available at:")
+        print("  ✓ /data/Consumer_Harm_Analysis.xlsx")
+        print("  ✓ /data/monte_carlo_raw_data.csv")
+        print("  ✓ /data/simulation_summary.txt")
+    else:
+        print("\nGenerated files:")
+        print("  ✓ Consumer_Harm_Analysis.xlsx - Comprehensive Excel report")
+        print("  ✓ monte_carlo_raw_data.csv - Raw simulation data")
+        print("  ✓ consumer_harm_analysis.png - Statistical visualizations")
+        print("  ✓ simulation_summary.txt - Key findings summary")
+        print("  ✓ simulation_results.zip - All files in one archive"))
     
     return True
 
